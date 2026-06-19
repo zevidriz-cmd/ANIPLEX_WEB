@@ -476,7 +476,7 @@ fun PlayerScreen(
                             urlLower.contains("ara") || urlLower.contains("-ar") -> "ar"
                             urlLower.contains("spa") || urlLower.contains("-es") -> "es"
                             urlLower.contains("fre") || urlLower.contains("-fr") -> "fr"
-                            else -> "und"
+                            else -> "en" // Automatically default to en instead of und so ExoPlayer auto-selects it
                         }
                         Handler(Looper.getMainLooper()).post {
                             if (capturedSubtitles.none { it.url == url }) {
