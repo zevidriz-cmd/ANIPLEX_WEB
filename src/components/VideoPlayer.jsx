@@ -31,6 +31,7 @@ export default function VideoPlayer({
   const [upNextDismissed, setUpNextDismissed] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -731,6 +732,12 @@ export default function VideoPlayer({
         }}
         onPause={() => setIsPlaying(false)}
         onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
+        onProgress={(e) => {
+          const video = e.target;
+          if (video.buffered.length > 0) {
+            setBufferedEnd(video.buffered.end(video.buffered.length - 1));
+          }
+        }}
         onDurationChange={(e) => setDuration(e.target.duration)}
         onEnded={onEnded}
         onWaiting={() => setIsLoading(true)}
@@ -869,17 +876,29 @@ export default function VideoPlayer({
 
         {/* Bottom controls panel */}
         <div className="player-bottom-panel">
-          {/* Progress Timeline Scrubber */}
+          {/* Progress Timeline Scrubber with Buffer Indicator */}
           <div className="scrubber-wrapper">
-            <input 
-              type="range" 
-              min="0" 
-              max="100" 
-              step="0.1"
-              value={duration ? (currentTime / duration) * 100 : 0}
-              onChange={handleProgressScrub}
-              className="progress-scrubber"
-            />
+            <div className="timeline-container">
+              <div className="timeline-track">
+                <div 
+                  className="timeline-buffered" 
+                  style={{ width: `${duration ? (bufferedEnd / duration) * 100 : 0}%` }}
+                />
+                <div 
+                  className="timeline-played" 
+                  style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                />
+              </div>
+              <input 
+                type="range" 
+                min="0" 
+                max="100" 
+                step="0.1"
+                value={duration ? (currentTime / duration) * 100 : 0}
+                onChange={handleProgressScrub}
+                className="timeline-input"
+              />
+            </div>
             <div className="time-display">
               <span>{formatTime(currentTime)}</span>
               <span>/</span>
@@ -1128,14 +1147,66 @@ export default function VideoPlayer({
           align-items: center;
           gap: 15px;
         }
-        .progress-scrubber {
+        .timeline-container {
           flex-grow: 1;
-          height: 4px;
-          background: rgba(255, 255, 255, 0.2);
-          border-radius: 2px;
-          outline: none;
+          position: relative;
+          height: 14px;
+          display: flex;
+          align-items: center;
           cursor: pointer;
-          accent-color: var(--primary);
+        }
+        .timeline-track {
+          position: absolute;
+          left: 0;
+          right: 0;
+          height: 4px;
+          background: rgba(255, 255, 255, 0.15);
+          border-radius: 2px;
+          overflow: hidden;
+          transition: height 0.15s ease;
+        }
+        .timeline-container:hover .timeline-track {
+          height: 6px;
+        }
+        .timeline-buffered {
+          position: absolute;
+          top: 0;
+          left: 0;
+          height: 100%;
+          background: rgba(255, 255, 255, 0.35);
+          border-radius: 2px;
+          transition: width 0.3s ease;
+        }
+        .timeline-played {
+          position: absolute;
+          top: 0;
+          left: 0;
+          height: 100%;
+          background: var(--primary);
+          border-radius: 2px;
+        }
+        .timeline-input {
+          position: absolute;
+          left: 0;
+          right: 0;
+          width: 100%;
+          height: 100%;
+          opacity: 0;
+          cursor: pointer;
+          margin: 0;
+          z-index: 2;
+        }
+        .timeline-container:hover .timeline-played::after {
+          content: '';
+          position: absolute;
+          right: -6px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 12px;
+          height: 12px;
+          background: var(--primary);
+          border-radius: 50%;
+          box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
         }
         .time-display {
           font-size: 0.8rem;
