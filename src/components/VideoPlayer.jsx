@@ -1,0 +1,1112 @@
+import React, { useEffect, useRef, useState } from "react";
+import Hls from "hls.js";
+import { 
+  Play, Pause, RotateCcw, RotateCw, Volume2, VolumeX, 
+  Maximize, Minimize, Settings, Subtitles, SkipForward,
+  Lock, LockOpen, ArrowLeft
+} from "lucide-react";
+
+export default function VideoPlayer({ 
+  src, 
+  tracks = [], 
+  intro, 
+  outro, 
+  initialTime = 0, 
+  onProgress, 
+  onEnded, 
+  embedUrl,
+  animeTitle,
+  episodeNumber,
+  onBack
+}) {
+  const videoRef = useRef(null);
+  const containerRef = useRef(null);
+  const hlsRef = useRef(null);
+  const lastSavedTimeRef = useRef(0);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  
+  const [showSkipIntro, setShowSkipIntro] = useState(false);
+  const [showSkipOutro, setShowSkipOutro] = useState(false);
+  const [hlsQualities, setHlsQualities] = useState([]);
+  const [currentQuality, setCurrentQuality] = useState(-1); // -1 = Auto
+
+  // Touch Swipe & Double Tap Gestures
+  const touchRef = useRef({
+    startX: 0,
+    startY: 0,
+    startVolume: 1,
+    startBrightness: 1,
+    isSwipe: false,
+    activeSide: null
+  });
+  const lastTapRef = useRef({ time: 0, x: 0 });
+
+  const [brightness, setBrightness] = useState(1.0);
+  const [gestureHUD, setGestureHUD] = useState(null); // { type, value }
+  const [hudTimeout, setHudTimeout] = useState(null);
+  const [isLocked, setIsLocked] = useState(false);
+
+  // Subtitle custom styles
+  const subSize = localStorage.getItem("anistream_subtitle_size") || "medium";
+  const subColor = localStorage.getItem("anistream_subtitle_color") || "white";
+  const subBg = localStorage.getItem("anistream_subtitle_bg") || "semi-transparent";
+
+  const showHUD = (type, value) => {
+    setGestureHUD({ type, value });
+    if (hudTimeout) clearTimeout(hudTimeout);
+    const t = setTimeout(() => setGestureHUD(null), 1000);
+    setHudTimeout(t);
+  };
+
+  const handlePlayerTouchStart = (e) => {
+    if (isLocked) return;
+
+    const touch = e.touches[0];
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    const w = rect.width;
+
+    const now = Date.now();
+    const delay = now - lastTapRef.current.time;
+
+    if (delay < 300) {
+      if (x < w * 0.35) {
+        e.preventDefault();
+        handleRewind();
+        showHUD("seek", "-10s");
+        lastTapRef.current = { time: 0, x: 0 };
+        return;
+      } else if (x > w * 0.65) {
+        e.preventDefault();
+        handleForward();
+        showHUD("seek", "+10s");
+        lastTapRef.current = { time: 0, x: 0 };
+        return;
+      }
+    }
+
+    touchRef.current = {
+      startX: x,
+      startY: y,
+      startVolume: volume,
+      startBrightness: brightness,
+      isSwipe: false,
+      activeSide: x < w / 2 ? "left" : "right"
+    };
+
+    lastTapRef.current = { time: now, x };
+    resetControlsTimeout();
+  };
+
+  const handlePlayerTouchMove = (e) => {
+    if (isLocked) return;
+
+    const touch = e.touches[0];
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+
+    const dx = x - touchRef.current.startX;
+    const dy = y - touchRef.current.startY;
+
+    if (Math.abs(dy) > 10 && !touchRef.current.isSwipe) {
+      touchRef.current.isSwipe = true;
+    }
+
+    if (touchRef.current.isSwipe) {
+      e.preventDefault();
+      const height = rect.height;
+      const deltaPercent = -dy / height;
+
+      if (touchRef.current.activeSide === "left") {
+        const nextBrightness = Math.min(1.0, Math.max(0.1, touchRef.current.startBrightness + deltaPercent * 1.5));
+        setBrightness(nextBrightness);
+        showHUD("brightness", `${Math.round(nextBrightness * 100)}%`);
+      } else {
+        const nextVolume = Math.min(1.0, Math.max(0.0, touchRef.current.startVolume + deltaPercent * 1.5));
+        setVolume(nextVolume);
+        setIsMuted(nextVolume === 0);
+        showHUD("volume", `${Math.round(nextVolume * 100)}%`);
+      }
+    }
+  };
+
+  const handlePlayerTouchEnd = () => {
+    touchRef.current.isSwipe = false;
+  };
+
+  const handleContainerClick = (e) => {
+    if (
+      e.target.closest(".controls-wrapper") || 
+      e.target.closest(".settings-panel") || 
+      e.target.closest(".skip-time-overlay") || 
+      e.target.closest(".locked-state-overlay") ||
+      e.target.closest(".player-back-btn")
+    ) {
+      return;
+    }
+    if (isLocked) return;
+    setShowControls(prev => !prev);
+  };
+
+  const handleVideoClick = (e) => {
+    if (window.matchMedia("(pointer: coarse)").matches) {
+      return;
+    }
+    e.stopPropagation();
+    if (!isLocked) {
+      handlePlayPause();
+    }
+  };
+
+  // Activity timer for controls auto-hide
+  const controlsTimeoutRef = useRef(null);
+
+  const resetControlsTimeout = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying) setShowControls(false);
+    }, 3000);
+  };
+
+  useEffect(() => {
+    resetControlsTimeout();
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, [isPlaying]);
+
+  // Load HLS Video or Iframe Fallback
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !src) return;
+
+    // Reset state
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    lastSavedTimeRef.current = 0;
+
+    if (Hls.isSupported()) {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+      }
+
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90,
+        maxBufferLength: 60, // Buffer up to 60 seconds of video instead of 30
+        maxMaxBufferLength: 90,
+        maxBufferSize: 150 * 1024 * 1024, // Increase max buffer size limit to 150MB (default is 60MB) for high bitrate 1080p single-level streams
+        maxBufferHole: 0.5,
+        highWaterLoopDuration: 3,
+        nudgeMaxRetry: 8,
+        nudgeDelay: 0.1
+      });
+      hlsRef.current = hls;
+
+      hls.loadSource(src);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+        const qualities = hls.levels.map((level, index) => ({
+          index,
+          height: level.height,
+          bitrate: level.bitrate
+        }));
+        setHlsQualities(qualities);
+        
+        // Quality cap settings integration
+        const qualityCap = localStorage.getItem("anistream_quality_cap") || "Auto";
+        if (qualityCap !== "Auto") {
+          const capHeight = parseInt(qualityCap, 10);
+          if (!isNaN(capHeight)) {
+            let maxLvlIdx = -1;
+            hls.levels.forEach((level, idx) => {
+              if (level.height <= capHeight) {
+                if (maxLvlIdx === -1 || level.height > hls.levels[maxLvlIdx].height) {
+                  maxLvlIdx = idx;
+                }
+              }
+            });
+            if (maxLvlIdx !== -1) {
+              hls.maxLevel = maxLvlIdx;
+              setCurrentQuality(maxLvlIdx);
+            }
+          }
+        }
+        
+        // Restore initial saved progress if provided
+        if (initialTime > 0) {
+          video.currentTime = initialTime / 1000; // convert ms to seconds
+        }
+        
+        // Auto play on manifest parse
+        video.play().catch(e => console.log("Auto-play blocked by browser. Ready."));
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              hls.destroy();
+              break;
+          }
+        }
+      });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      // Native Safari support
+      video.src = src;
+      video.addEventListener("loadedmetadata", () => {
+        if (initialTime > 0) {
+          video.currentTime = initialTime / 1000;
+        }
+        video.play().catch(e => console.log(e));
+      });
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [src, initialTime]);
+
+  // Sync volume state
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = isMuted ? 0 : volume;
+  }, [volume, isMuted]);
+
+  // Skip overlays check
+  useEffect(() => {
+    // Check Skip Intro
+    if (intro && currentTime >= intro.start && currentTime <= intro.end) {
+      setShowSkipIntro(true);
+    } else {
+      setShowSkipIntro(false);
+    }
+
+    // Check Skip Outro
+    if (outro && currentTime >= outro.start && currentTime <= outro.end) {
+      setShowSkipOutro(true);
+    } else {
+      setShowSkipOutro(false);
+    }
+
+    // Periodic Progress Saving (every 10s, or when pausing/ending)
+    if (onProgress && duration > 0) {
+      const curMs = currentTime * 1000;
+      const durMs = duration * 1000;
+      
+      // Save every 10 seconds (10000ms)
+      if (Math.abs(curMs - lastSavedTimeRef.current) >= 10000) {
+        onProgress(Math.floor(curMs), Math.floor(durMs));
+        lastSavedTimeRef.current = curMs;
+      }
+    }
+  }, [currentTime, duration, intro, outro]);
+
+  const handlePlayPause = () => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (video.paused) {
+      video.play().then(() => setIsPlaying(true)).catch(e => console.log(e));
+    } else {
+      video.pause();
+      setIsPlaying(false);
+      // Save progress on pause
+      if (onProgress && duration > 0) {
+        onProgress(Math.floor(video.currentTime * 1000), Math.floor(video.duration * 1000));
+      }
+    }
+  };
+
+  const handleRewind = () => {
+    if (videoRef.current) videoRef.current.currentTime -= 10;
+  };
+
+  const handleForward = () => {
+    if (videoRef.current) videoRef.current.currentTime += 10;
+  };
+
+  const handleVolumeChange = (e) => {
+    const val = parseFloat(e.target.value);
+    setVolume(val);
+    setIsMuted(val === 0);
+  };
+
+  const handleMuteToggle = () => {
+    setIsMuted(!isMuted);
+  };
+
+  const handleFullscreenToggle = () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (!document.fullscreenElement) {
+      container.requestFullscreen()
+        .then(() => setIsFullscreen(true))
+        .catch(e => console.log(e));
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false));
+    }
+  };
+
+  // Sync fullscreen state & lock orientation to landscape on mobile
+  useEffect(() => {
+    const handleFsChange = () => {
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      if (isFs && screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock("landscape").catch(err => {
+          console.warn("Screen orientation lock failed:", err);
+        });
+      }
+    };
+    document.addEventListener("fullscreenchange", handleFsChange);
+    return () => document.removeEventListener("fullscreenchange", handleFsChange);
+  }, []);
+
+  // Desktop keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (
+        document.activeElement.tagName === "INPUT" ||
+        document.activeElement.tagName === "SELECT" ||
+        document.activeElement.tagName === "TEXTAREA"
+      ) {
+        return;
+      }
+
+      if (isLocked) return;
+
+      switch (e.key) {
+        case " ":
+        case "k":
+        case "K":
+          e.preventDefault();
+          handlePlayPause();
+          break;
+        case "ArrowLeft":
+        case "j":
+        case "J":
+          e.preventDefault();
+          handleRewind();
+          showHUD("seek", "-10s");
+          break;
+        case "ArrowRight":
+        case "l":
+        case "L":
+          e.preventDefault();
+          handleForward();
+          showHUD("seek", "+10s");
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setVolume((prev) => {
+            const next = Math.min(1.0, prev + 0.1);
+            showHUD("volume", `${Math.round(next * 100)}%`);
+            return next;
+          });
+          setIsMuted(false);
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          setVolume((prev) => {
+            const next = Math.max(0.0, prev - 0.1);
+            showHUD("volume", `${Math.round(next * 100)}%`);
+            if (next === 0) setIsMuted(true);
+            return next;
+          });
+          break;
+        case "f":
+        case "F":
+          e.preventDefault();
+          handleFullscreenToggle();
+          break;
+        case "m":
+        case "M":
+          e.preventDefault();
+          handleMuteToggle();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [volume, isMuted, isLocked, isFullscreen, isPlaying, duration, currentTime]);
+
+  const handleProgressScrub = (e) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const seekTime = (parseFloat(e.target.value) / 100) * duration;
+    video.currentTime = seekTime;
+    setCurrentTime(seekTime);
+  };
+
+  const changePlaybackSpeed = (speed) => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed;
+      setPlaybackSpeed(speed);
+    }
+    setShowSettings(false);
+  };
+
+  const changeQuality = (qualityIdx) => {
+    if (hlsRef.current) {
+      hlsRef.current.currentLevel = qualityIdx;
+      setCurrentQuality(qualityIdx);
+    }
+    setShowSettings(false);
+  };
+
+  const handleSkipIntro = () => {
+    if (videoRef.current && intro) {
+      videoRef.current.currentTime = intro.end;
+      setShowSkipIntro(false);
+    }
+  };
+
+  const handleSkipOutro = () => {
+    if (videoRef.current && outro) {
+      videoRef.current.currentTime = outro.end;
+      setShowSkipOutro(false);
+    }
+  };
+
+  const formatTime = (timeInSeconds) => {
+    if (isNaN(timeInSeconds)) return "00:00";
+    const hours = Math.floor(timeInSeconds / 3600);
+    const minutes = Math.floor((timeInSeconds % 3600) / 60);
+    const seconds = Math.floor(timeInSeconds % 60);
+
+    const pad = (n) => String(n).padStart(2, "0");
+    if (hours > 0) {
+      return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+    }
+    return `${pad(minutes)}:${pad(seconds)}`;
+  };
+
+  // Save progress on unmount
+  useEffect(() => {
+    return () => {
+      const video = videoRef.current;
+      if (video && onProgress && video.duration > 0) {
+        onProgress(Math.floor(video.currentTime * 1000), Math.floor(video.duration * 1000));
+      }
+    };
+  }, [src, duration]);
+
+  // If HLS source is not available, render the Iframe Web Player
+  if (!src && embedUrl) {
+    const cleanedEmbedUrl = embedUrl.replace(/(\/stream\/s-[1-9]\/)(\d+)\/(\d+)/, (m, p1, p2, p3) => p1 + p3);
+    const separator = cleanedEmbedUrl.includes("?") ? "&" : "?";
+    return (
+      <div className="iframe-player-wrapper">
+        <iframe 
+          src={`${cleanedEmbedUrl}${separator}autoPlay=1`} 
+          title="Episode Stream Player" 
+          allowFullScreen
+          allow="autoplay; fullscreen; picture-in-picture"
+          referrerPolicy="no-referrer"
+          className="iframe-player-frame"
+        ></iframe>
+        <style>{`
+          .iframe-player-wrapper {
+            position: relative;
+            width: 100%;
+            padding-top: 56.25%; /* 16:9 ratio */
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+          }
+          .iframe-player-frame {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  return (
+    <div 
+      className={`player-container ${isFullscreen ? "fullscreen" : ""}`} 
+      ref={containerRef}
+      onMouseMove={resetControlsTimeout}
+      onMouseLeave={() => isPlaying && setShowControls(false)}
+      onTouchStart={handlePlayerTouchStart}
+      onTouchMove={handlePlayerTouchMove}
+      onTouchEnd={handlePlayerTouchEnd}
+      onClick={handleContainerClick}
+    >
+      {/* Brightness Emulation Overlay */}
+      <div 
+        className="brightness-emulation-overlay" 
+        style={{ 
+          opacity: 1 - brightness,
+          backgroundColor: "black",
+          position: "absolute",
+          inset: 0,
+          pointerEvents: "none",
+          zIndex: 45
+        }}
+      />
+
+      {/* Gesture HUD */}
+      {gestureHUD && (
+        <div className="gesture-hud-overlay flex-center">
+          <div className="gesture-hud-content">
+            <span className="gesture-hud-val">
+              {gestureHUD.type === "volume" && `🔊 Volume: ${gestureHUD.value}`}
+              {gestureHUD.type === "brightness" && `☀️ Brightness: ${gestureHUD.value}`}
+              {gestureHUD.type === "seek" && `⏩ Seek: ${gestureHUD.value}`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Screen Lock Mobile Overlay */}
+      {isLocked && (
+        <div className="locked-state-overlay" onClick={() => setShowControls(true)}>
+          {showControls && (
+            <button 
+              className="unlock-btn flex-center"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsLocked(false);
+                resetControlsTimeout();
+              }}
+            >
+              <LockOpen size={20} /> Tap to Unlock
+            </button>
+          )}
+        </div>
+      )}
+
+      <video 
+        ref={videoRef}
+        className="video-element"
+        onClick={handleVideoClick}
+        onDoubleClick={handleFullscreenToggle}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
+        onDurationChange={(e) => setDuration(e.target.duration)}
+        onEnded={onEnded}
+        crossOrigin="anonymous"
+      >
+        {tracks.map((track, i) => (
+          <track 
+            key={i}
+            src={track.file}
+            kind={track.kind || "subtitles"}
+            label={track.label}
+            srcLang={track.label?.substring(0, 2).toLowerCase() || "en"}
+            default={track.label?.toLowerCase() === "english" || i === 0}
+          />
+        ))}
+      </video>
+
+      {/* Intro Skip Overlay */}
+      {showSkipIntro && (
+        <button className="skip-time-overlay intro" onClick={handleSkipIntro}>
+          <SkipForward size={16} /> Skip Intro
+        </button>
+      )}
+
+      {/* Outro Skip Overlay */}
+      {showSkipOutro && (
+        <button className="skip-time-overlay outro" onClick={handleSkipOutro}>
+          <SkipForward size={16} /> Skip Outro
+        </button>
+      )}
+
+      {/* Custom Controls UI */}
+      <div className={`controls-wrapper ${showControls ? "visible" : "hidden"}`}>
+        {/* Top title bar */}
+        <div className="player-top-bar">
+          {onBack && (
+            <button className="player-back-btn" onClick={onBack} aria-label="Back" type="button">
+              <ArrowLeft size={24} />
+            </button>
+          )}
+          <div className="title-info">
+            <span className="anime-title">{animeTitle}</span>
+            <span className="episode-badge">Episode {episodeNumber}</span>
+          </div>
+        </div>
+
+        {/* Center buttons */}
+        <div className="player-center-controls">
+          <button className="control-btn center-btn" onClick={handleRewind}>
+            <RotateCcw size={28} />
+          </button>
+          <button className="control-btn center-btn play-pause-btn" onClick={handlePlayPause}>
+            {isPlaying ? <Pause size={38} fill="white" /> : <Play size={38} fill="white" />}
+          </button>
+          <button className="control-btn center-btn" onClick={handleForward}>
+            <RotateCw size={28} />
+          </button>
+        </div>
+
+        {/* Bottom controls panel */}
+        <div className="player-bottom-panel">
+          {/* Progress Timeline Scrubber */}
+          <div className="scrubber-wrapper">
+            <input 
+              type="range" 
+              min="0" 
+              max="100" 
+              step="0.1"
+              value={duration ? (currentTime / duration) * 100 : 0}
+              onChange={handleProgressScrub}
+              className="progress-scrubber"
+            />
+            <div className="time-display">
+              <span>{formatTime(currentTime)}</span>
+              <span>/</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+          </div>
+
+          {/* Action buttons row */}
+          <div className="controls-row">
+            <div className="left-controls">
+              <button className="control-btn" onClick={handleMuteToggle}>
+                {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+              </button>
+              <input 
+                type="range" 
+                min="0" 
+                max="1" 
+                step="0.05"
+                value={isMuted ? 0 : volume}
+                onChange={handleVolumeChange}
+                className="volume-slider"
+              />
+            </div>
+
+            <div className="right-controls">
+              {/* Settings Trigger */}
+              <div className="settings-menu-wrapper">
+                <button 
+                  className={`control-btn ${showSettings ? "active" : ""}`}
+                  onClick={() => setShowSettings(!showSettings)}
+                >
+                  <Settings size={20} />
+                </button>
+
+                {showSettings && (
+                  <div className="settings-panel">
+                    <div className="settings-section">
+                      <h4>Playback Speed</h4>
+                      <div className="settings-options">
+                        {[0.5, 1, 1.25, 1.5, 2].map(speed => (
+                          <button 
+                            key={speed} 
+                            onClick={() => changePlaybackSpeed(speed)}
+                            className={playbackSpeed === speed ? "active" : ""}
+                          >
+                            {speed}x
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {hlsQualities.length > 0 && (
+                      <div className="settings-section">
+                        <h4>Quality</h4>
+                        <div className="settings-options scrollable">
+                          <button 
+                            onClick={() => changeQuality(-1)}
+                            className={currentQuality === -1 ? "active" : ""}
+                          >
+                            Auto
+                          </button>
+                          {hlsQualities.map(q => (
+                            <button 
+                              key={q.index} 
+                              onClick={() => changeQuality(q.index)}
+                              className={currentQuality === q.index ? "active" : ""}
+                            >
+                              {q.height}p
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Lock Controls Button */}
+              {!isLocked && (
+                <button 
+                  className="control-btn" 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsLocked(true);
+                    setShowControls(false);
+                  }}
+                  title="Lock Controls"
+                >
+                  <Lock size={20} />
+                </button>
+              )}
+ 
+              <button className="control-btn" onClick={handleFullscreenToggle}>
+                {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        .player-container {
+          position: relative;
+          width: 100%;
+          padding-top: 56.25%; /* 16:9 aspect ratio */
+          background-color: #000;
+          overflow: hidden;
+          border-radius: 8px;
+          border: 1px solid var(--border);
+        }
+        .player-container.fullscreen {
+          padding-top: 0;
+          height: 100vh;
+          width: 100vw;
+          border-radius: 0;
+          border: none;
+        }
+        .video-element {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+        
+        /* Skip Overlays */
+        .skip-time-overlay {
+          position: absolute;
+          bottom: 120px;
+          right: 30px;
+          z-index: 50;
+          background-color: rgba(229, 9, 20, 0.95);
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          font-family: var(--font-family);
+          font-size: 0.9rem;
+          font-weight: 700;
+          border-radius: 4px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+          transition: var(--transition);
+        }
+        .skip-time-overlay:hover {
+          transform: scale(1.05);
+          background-color: white;
+          color: var(--primary);
+        }
+
+        /* Controls styling */
+        .controls-wrapper {
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 20%, transparent 80%, rgba(0,0,0,0.8) 100%);
+          z-index: 40;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          padding: 20px;
+          transition: opacity 0.3s ease;
+        }
+        .controls-wrapper.visible { opacity: 1; pointer-events: auto; }
+        .controls-wrapper.hidden { opacity: 0; pointer-events: none; }
+        
+        .player-top-bar {
+          display: flex;
+          align-items: center;
+          justify-content: flex-start;
+          width: 100%;
+        }
+        .player-back-btn {
+          background: none;
+          border: none;
+          color: white;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 8px;
+          margin-right: 12px;
+          border-radius: 50%;
+          transition: var(--transition);
+        }
+        .player-back-btn:hover {
+          background-color: rgba(255, 255, 255, 0.1);
+        }
+        .title-info {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .anime-title {
+          font-size: 1.1rem;
+          font-weight: 700;
+          color: white;
+        }
+        .episode-badge {
+          background-color: rgba(255, 255, 255, 0.2);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-size: 0.75rem;
+          font-weight: 600;
+        }
+
+        .player-center-controls {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 2.5rem;
+        }
+        .control-btn {
+          background: none;
+          border: none;
+          color: rgba(255, 255, 255, 0.85);
+          cursor: pointer;
+          transition: var(--transition);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .control-btn:hover {
+          color: white;
+          transform: scale(1.1);
+        }
+        .play-pause-btn {
+          background-color: var(--primary);
+          width: 70px;
+          height: 70px;
+          border-radius: 50%;
+          box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+        .play-pause-btn:hover {
+          background-color: var(--primary-hover);
+        }
+
+        .player-bottom-panel {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .scrubber-wrapper {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+        }
+        .progress-scrubber {
+          flex-grow: 1;
+          height: 4px;
+          background: rgba(255, 255, 255, 0.2);
+          border-radius: 2px;
+          outline: none;
+          cursor: pointer;
+          accent-color: var(--primary);
+        }
+        .time-display {
+          font-size: 0.8rem;
+          font-weight: 500;
+          color: var(--text-secondary);
+          display: flex;
+          gap: 4px;
+          min-width: 90px;
+          justify-content: flex-end;
+        }
+
+        .controls-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .left-controls, .right-controls {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+        }
+        .volume-slider {
+          width: 80px;
+          height: 4px;
+          cursor: pointer;
+          accent-color: var(--primary);
+        }
+
+        /* Settings dropdown Panel */
+        .settings-menu-wrapper {
+          position: relative;
+        }
+        .settings-panel {
+          position: absolute;
+          bottom: calc(100% + 15px);
+          right: 0;
+          background: #141414;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 12px;
+          width: 200px;
+          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          z-index: 50;
+        }
+        .settings-section h4 {
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: var(--text-muted);
+          margin-bottom: 6px;
+        }
+        .settings-options {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+        .settings-options.scrollable {
+          max-height: 120px;
+          overflow-y: auto;
+        }
+        .settings-options button {
+          flex: 1 0 calc(50% - 4px);
+          background: var(--bg-input);
+          border: 1px solid var(--border);
+          color: var(--text-secondary);
+          padding: 4px 6px;
+          font-size: 0.75rem;
+          border-radius: 4px;
+          cursor: pointer;
+          font-family: var(--font-family);
+          transition: var(--transition);
+        }
+        .settings-options button.active {
+          background: var(--primary);
+          color: white;
+          border-color: var(--primary);
+        }
+        .settings-options button:hover:not(.active) {
+          background: #2A2A2A;
+          color: white;
+        }
+
+        /* Subtitle styles custom overrides using cue selector */
+        video::cue {
+          background-color: ${
+            subBg === "transparent"
+              ? "transparent"
+              : subBg === "opaque"
+              ? "rgba(0, 0, 0, 1.0)"
+              : "rgba(0, 0, 0, 0.6)"
+          } !important;
+          color: ${subColor === "yellow" ? "#FFE600" : "#FFFFFF"} !important;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9) !important;
+          font-family: var(--font-family) !important;
+          font-size: ${
+            subSize === "small"
+              ? "80%"
+              : subSize === "large"
+              ? "130%"
+              : "100%"
+          } !important;
+        }
+
+        /* Gesture HUD styles */
+        .gesture-hud-overlay {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          z-index: 60;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .gesture-hud-content {
+          background-color: rgba(0, 0, 0, 0.8);
+          border-radius: 8px;
+          padding: 12px 24px;
+          color: white;
+          font-weight: 700;
+          font-size: 1rem;
+          border: 1px solid var(--border);
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+          animation: scaleHUD 0.15s ease-out;
+        }
+        @keyframes scaleHUD {
+          from { transform: scale(0.85); opacity: 0; }
+          to { transform: scale(1); opacity: 1; }
+        }
+
+        /* Lock Screen overlays */
+        .locked-state-overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 55;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.2);
+        }
+        .unlock-btn {
+          background: rgba(229, 9, 20, 0.95);
+          color: white;
+          font-weight: 700;
+          font-size: 0.9rem;
+          padding: 10px 20px;
+          border: none;
+          border-radius: 30px;
+          cursor: pointer;
+          gap: 8px;
+          box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+          animation: scaleHUD 0.15s ease-out;
+        }
+        .unlock-btn:hover {
+          background: white;
+          color: var(--primary);
+        }
+      `}</style>
+    </div>
+  );
+}
