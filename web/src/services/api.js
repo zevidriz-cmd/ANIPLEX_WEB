@@ -103,7 +103,11 @@ export async function getDirectStream(episodeId, server = "hd-1", category = "su
 
   try {
     const sourcesProxyUrl = `${STREAM_PROXY_BASE}/megaplay.buzz/stream/getSources?id=${dataId}`;
-    const res = await fetch(sourcesProxyUrl);
+    const res = await fetch(sourcesProxyUrl, {
+      headers: {
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
     if (res.ok) {
       const data = await res.json();
       if (data?.sources?.file) {
@@ -117,7 +121,11 @@ export async function getDirectStream(episodeId, server = "hd-1", category = "su
 
   if (!success) {
     const sourcesNewProxyUrl = `${STREAM_PROXY_BASE}/megaplay.buzz/stream/getSourcesNew?id=${dataId}`;
-    const res = await fetch(sourcesNewProxyUrl);
+    const res = await fetch(sourcesNewProxyUrl, {
+      headers: {
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
     if (!res.ok) throw new Error(`Proxy error fetching HLS sources: ${res.status}`);
     sourcesNewJson = await res.json();
   }

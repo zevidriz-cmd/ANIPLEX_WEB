@@ -29,6 +29,7 @@ export default defineConfig({
               if (req.headers['sec-ch-ua']) headers['sec-ch-ua'] = req.headers['sec-ch-ua'];
               if (req.headers['sec-ch-ua-mobile']) headers['sec-ch-ua-mobile'] = req.headers['sec-ch-ua-mobile'];
               if (req.headers['sec-ch-ua-platform']) headers['sec-ch-ua-platform'] = req.headers['sec-ch-ua-platform'];
+              if (req.headers['x-requested-with']) headers['x-requested-with'] = req.headers['x-requested-with'];
               
               // Standard Cloudflare bypass security context
               headers['sec-fetch-dest'] = 'empty';

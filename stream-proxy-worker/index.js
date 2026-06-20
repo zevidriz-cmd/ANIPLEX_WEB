@@ -41,6 +41,9 @@ export default {
       const secChPlatform = request.headers.get("sec-ch-ua-platform");
       if (secChPlatform) headers.set("sec-ch-ua-platform", secChPlatform);
 
+      const xRequestedWith = request.headers.get("x-requested-with");
+      if (xRequestedWith) headers.set("x-requested-with", xRequestedWith);
+
       headers.set("sec-fetch-dest", "empty");
       headers.set("sec-fetch-mode", "cors");
       headers.set("sec-fetch-site", "cross-site");
