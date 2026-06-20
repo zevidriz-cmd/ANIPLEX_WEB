@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { collection, query, orderBy, getDocs } from "firebase/firestore";
+import { collection, query, orderBy, getDocs, doc, deleteDoc } from "firebase/firestore";
 import { db } from "../config/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useProfile } from "../context/ProfileContext";
@@ -257,6 +257,17 @@ export default function HomePage() {
     loadHistory();
   }, [currentUser, activeProfile]);
 
+  const handleRemoveItem = async (animeId) => {
+    if (!currentUser || !activeProfile) return;
+    const docRef = doc(db, "users", currentUser.uid, "profiles", activeProfile.id, "history", animeId);
+    try {
+      await deleteDoc(docRef);
+      setHistoryList(prev => prev.filter(item => item.animeId !== animeId));
+    } catch (e) {
+      console.error("Error removing watch history item:", e);
+    }
+  };
+
   if (loading) {
     return (
       <div className="home-loading-wrapper">
@@ -322,6 +333,8 @@ export default function HomePage() {
                       poster={item.poster}
                       progressPercent={percent}
                       episodeInfo={progressText}
+                      onRemove={handleRemoveItem}
+                      episodeId={item.episodeId}
                     />
                   </div>
                 );

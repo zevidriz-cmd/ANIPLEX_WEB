@@ -127,9 +127,7 @@ export async function getDirectStream(episodeId, server = "hd-1", category = "su
 
   // Rewrite the fileUrl to go through our Netlify function proxy (to bypass Cloudflare WAF on playlist domains)
   const cleanFileUrl = fileUrl.replace(/https:\/\//, '');
-  const netlifyProxyBase = import.meta.env.DEV
-    ? 'https://anistream-web-f1886391.netlify.app/.netlify/functions/stream-proxy'
-    : '/.netlify/functions/stream-proxy';
+  const netlifyProxyBase = 'https://anistream-web-f1886391.netlify.app/.netlify/functions/stream-proxy';
   const proxiedFileUrl = `${netlifyProxyBase}/${cleanFileUrl}`;
 
   // Rewrite subtitle tracks to go through proxy too

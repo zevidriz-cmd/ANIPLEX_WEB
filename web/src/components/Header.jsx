@@ -132,6 +132,10 @@ export default function Header() {
             <Bookmark size={20} />
             <span>My List</span>
           </NavLink>
+          <NavLink to="/history" className={({ isActive }) => isActive ? "mobile-nav-item active" : "mobile-nav-item"}>
+            <History size={20} />
+            <span>History</span>
+          </NavLink>
           <NavLink to="/my-anistream" className={({ isActive }) => isActive ? "mobile-nav-item active" : "mobile-nav-item"}>
             <div className={`mobile-nav-avatar ${activeProfile.avatarUrl}`}>
               {activeProfile.name.charAt(0).toUpperCase()}
