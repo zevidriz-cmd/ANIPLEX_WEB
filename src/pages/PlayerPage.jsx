@@ -100,6 +100,23 @@ export default function PlayerPage() {
     loadPlayer();
   }, [animeId, episodeId, audioCategory, selectedServer, currentUser, activeProfile]);
 
+  const markAsCompleted = async () => {
+    if (!currentUser || !activeProfile || !animeDetail) return;
+    try {
+      const watchlistRef = doc(db, "users", currentUser.uid, "profiles", activeProfile.id, "watchlist", animeId);
+      await setDoc(watchlistRef, {
+        id: animeId,
+        name: animeDetail.anime.info.name,
+        poster: animeDetail.anime.info.poster,
+        status: "completed",
+        addedAt: Date.now()
+      }, { merge: true });
+      console.log("Anime marked as completed in watchlist");
+    } catch (e) {
+      console.warn("Error marking anime as completed:", e);
+    }
+  };
+
   const handleProgressSave = async (progressMs, durationMs) => {
     if (!currentUser || !activeProfile || !animeDetail || !currentEpisode) return;
 
@@ -138,15 +155,26 @@ export default function PlayerPage() {
 
       const docRef = doc(db, "users", currentUser.uid, "profiles", activeProfile.id, "history", animeId);
       await setDoc(docRef, data);
+
+      // Automatically mark as completed in watchlist if last episode is watched near end
+      const isLastEpisode = currentIndex !== -1 && currentIndex === episodes.length - 1;
+      if (isNearEnd && isLastEpisode) {
+        await markAsCompleted();
+      }
     } catch (e) {
       console.warn("Error saving progress to Firestore:", e);
     }
   };
 
   const handleEpisodeEnded = () => {
+    const currentIndex = episodes.findIndex(e => e.episodeId === episodeId);
+    const isLastEpisode = currentIndex !== -1 && currentIndex === episodes.length - 1;
+    if (isLastEpisode) {
+      markAsCompleted();
+    }
+
     const autoplaySetting = localStorage.getItem("anistream_autoplay") !== "false";
     if (autoplaySetting) {
-      const currentIndex = episodes.findIndex(e => e.episodeId === episodeId);
       if (currentIndex !== -1 && currentIndex < episodes.length - 1) {
         const nextEp = episodes[currentIndex + 1];
         navigate(`/watch/${animeId}/${nextEp.episodeId}?audio=${audioCategory}`);
