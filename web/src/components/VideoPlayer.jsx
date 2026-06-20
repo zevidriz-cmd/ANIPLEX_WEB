@@ -446,16 +446,11 @@ export default function VideoPlayer({
     }
   };
 
-  // Sync fullscreen state & lock orientation to landscape on mobile
+  // Sync fullscreen state
   useEffect(() => {
     const handleFsChange = () => {
       const isFs = !!document.fullscreenElement;
       setIsFullscreen(isFs);
-      if (isFs && screen.orientation && screen.orientation.lock) {
-        screen.orientation.lock("landscape").catch(err => {
-          console.warn("Screen orientation lock failed:", err);
-        });
-      }
     };
     document.addEventListener("fullscreenchange", handleFsChange);
     return () => document.removeEventListener("fullscreenchange", handleFsChange);
