@@ -93,6 +93,8 @@ export default function DetailPage() {
 
   // Firestore Sync States
   const [isWatchlisted, setIsWatchlisted] = useState(false);
+  const [watchlistStatus, setWatchlistStatus] = useState("");
+  const [showWatchlistMenu, setShowWatchlistMenu] = useState(false);
   const [historyItem, setHistoryItem] = useState(null);
   const [userRating, setUserRating] = useState(0);
   
@@ -142,6 +144,11 @@ export default function DetailPage() {
           ]);
 
           setIsWatchlisted(watchSnap.exists());
+          if (watchSnap.exists()) {
+            setWatchlistStatus(watchSnap.data().status || "planning");
+          } else {
+            setWatchlistStatus("");
+          }
           if (histSnap.exists()) {
             setHistoryItem(histSnap.data());
           } else {
@@ -235,7 +242,7 @@ export default function DetailPage() {
     loadData();
   }, [animeId, currentUser, activeProfile]);
 
-  const handleWatchlistToggle = async () => {
+  const handleUpdateWatchlistStatus = async (status) => {
     if (!currentUser || !activeProfile) {
       alert("Please sign in and select a profile first!");
       return;
@@ -243,18 +250,21 @@ export default function DetailPage() {
 
     const docRef = doc(db, "users", currentUser.uid, "profiles", activeProfile.id, "watchlist", animeId);
     try {
-      if (isWatchlisted) {
+      if (status === "") {
         await deleteDoc(docRef);
         setIsWatchlisted(false);
+        setWatchlistStatus("");
       } else {
         const item = {
           id: animeId,
           name: detail.anime.info.name,
           poster: detail.anime.info.poster,
+          status: status,
           addedAt: Date.now()
         };
         await setDoc(docRef, item);
         setIsWatchlisted(true);
+        setWatchlistStatus(status);
       }
     } catch (e) {
       console.error("Watchlist save error:", e);
@@ -435,17 +445,121 @@ export default function DetailPage() {
                 <button className="btn btn-primary watch-now-btn" disabled>No Episodes Available</button>
               )}
 
-              <button className="btn btn-secondary watchlist-toggle-btn desktop-only" onClick={handleWatchlistToggle}>
-                {isWatchlisted ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
-                {isWatchlisted ? "Saved in Watchlist" : "Add to Watchlist"}
-              </button>
+              <div className="watchlist-dropdown-wrapper desktop-only">
+                <button 
+                  className={`btn ${isWatchlisted ? "btn-secondary" : "btn-secondary"} watchlist-toggle-btn`}
+                  onClick={() => setShowWatchlistMenu(!showWatchlistMenu)}
+                  type="button"
+                >
+                  {isWatchlisted ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
+                  <span>
+                    {isWatchlisted 
+                      ? `List: ${
+                          watchlistStatus === "watching" 
+                            ? "Watching" 
+                            : watchlistStatus === "completed" 
+                            ? "Completed" 
+                            : "Plan to Watch"
+                        }` 
+                      : "Add to List"}
+                  </span>
+                  <ChevronDown size={14} style={{ marginLeft: "4px" }} />
+                </button>
+                {showWatchlistMenu && (
+                  <>
+                    <div className="dropdown-backplate" onClick={() => setShowWatchlistMenu(false)} />
+                    <div className="watchlist-menu-dropdown">
+                      {[
+                        { id: "planning", name: "Plan to Watch" },
+                        { id: "watching", name: "Watching" },
+                        { id: "completed", name: "Completed" }
+                      ].map(opt => (
+                        <button 
+                          key={opt.id}
+                          className={`watchlist-menu-item ${watchlistStatus === opt.id ? "active" : ""}`}
+                          onClick={() => {
+                            handleUpdateWatchlistStatus(opt.id);
+                            setShowWatchlistMenu(false);
+                          }}
+                          type="button"
+                        >
+                          {opt.name}
+                        </button>
+                      ))}
+                      {isWatchlisted && (
+                        <button 
+                          className="watchlist-menu-item remove-item"
+                          onClick={() => {
+                            handleUpdateWatchlistStatus("");
+                            setShowWatchlistMenu(false);
+                          }}
+                          type="button"
+                        >
+                          Remove from List
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
 
               {/* Mobile icon actions group */}
               <div className="mobile-action-buttons-group">
-                <button className="action-icon-btn watchlist-toggle-btn" onClick={handleWatchlistToggle} type="button">
-                  {isWatchlisted ? <BookmarkCheck size={20} className="active-icon" /> : <Bookmark size={20} />}
-                  <span>My List</span>
-                </button>
+                <div className="mobile-watchlist-wrapper">
+                  <button 
+                    className="action-icon-btn watchlist-toggle-btn" 
+                    onClick={() => setShowWatchlistMenu(!showWatchlistMenu)} 
+                    type="button"
+                  >
+                    {isWatchlisted ? <BookmarkCheck size={20} className="active-icon" /> : <Bookmark size={20} />}
+                    <span>
+                      {isWatchlisted 
+                        ? (watchlistStatus === "watching" 
+                            ? "Watching" 
+                            : watchlistStatus === "completed" 
+                            ? "Completed" 
+                            : "Planning") 
+                        : "My List"}
+                    </span>
+                  </button>
+                  {showWatchlistMenu && (
+                    <>
+                      <div className="dropdown-backplate" onClick={() => setShowWatchlistMenu(false)} style={{ zIndex: 110 }} />
+                      <div className="watchlist-menu-dropdown mobile-menu">
+                        <div className="mobile-menu-header">Select Status</div>
+                        {[
+                          { id: "planning", name: "Plan to Watch" },
+                          { id: "watching", name: "Watching" },
+                          { id: "completed", name: "Completed" }
+                        ].map(opt => (
+                          <button 
+                            key={opt.id}
+                            className={`watchlist-menu-item ${watchlistStatus === opt.id ? "active" : ""}`}
+                            onClick={() => {
+                              handleUpdateWatchlistStatus(opt.id);
+                              setShowWatchlistMenu(false);
+                            }}
+                            type="button"
+                          >
+                            {opt.name}
+                          </button>
+                        ))}
+                        {isWatchlisted && (
+                          <button 
+                            className="watchlist-menu-item remove-item"
+                            onClick={() => {
+                              handleUpdateWatchlistStatus("");
+                              setShowWatchlistMenu(false);
+                            }}
+                            type="button"
+                          >
+                            Remove from List
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 <button className="action-icon-btn rate-toggle-btn" onClick={() => setShowMobileRating(!showMobileRating)} type="button">
                   <Star size={20} className={userRating > 0 ? "active-icon" : ""} fill={userRating > 0 ? "currentColor" : "none"} />
@@ -780,6 +894,90 @@ export default function DetailPage() {
       </div>
 
       <style>{`
+        /* Watchlist Dropdown Menus */
+        .watchlist-dropdown-wrapper {
+          position: relative;
+        }
+        .watchlist-menu-dropdown {
+          position: absolute;
+          top: calc(100% + 8px);
+          left: 0;
+          background-color: #141414;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          min-width: 180px;
+          box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+          display: flex;
+          flex-direction: column;
+          padding: 6px;
+          z-index: 100;
+          animation: scaleHUD 0.15s ease-out;
+        }
+        .watchlist-menu-item {
+          background: none;
+          border: none;
+          color: var(--text-secondary);
+          padding: 10px 14px;
+          text-align: left;
+          font-size: 0.85rem;
+          font-family: var(--font-family);
+          font-weight: 600;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: var(--transition);
+        }
+        .watchlist-menu-item:hover {
+          background-color: #242424;
+          color: white;
+        }
+        .watchlist-menu-item.active {
+          background-color: var(--primary);
+          color: white;
+        }
+        .watchlist-menu-item.remove-item {
+          border-top: 1px solid var(--border);
+          margin-top: 4px;
+          border-radius: 0 0 4px 4px;
+          color: #ff4d4d;
+        }
+        .watchlist-menu-item.remove-item:hover {
+          background-color: rgba(255, 77, 77, 0.1);
+        }
+        
+        /* Mobile specific positioning */
+        .mobile-watchlist-wrapper {
+          position: relative;
+        }
+        .watchlist-menu-dropdown.mobile-menu {
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          top: auto;
+          width: 100%;
+          border-radius: 16px 16px 0 0;
+          border: none;
+          border-top: 1px solid var(--border);
+          background-color: #141414;
+          padding: 16px;
+          box-shadow: 0 -10px 30px rgba(0,0,0,0.6);
+          z-index: 120;
+          animation: slideUpMobile 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .mobile-menu-header {
+          font-size: 0.95rem;
+          font-weight: 700;
+          color: white;
+          margin-bottom: 12px;
+          text-align: center;
+          padding-bottom: 8px;
+          border-bottom: 1px solid var(--border);
+        }
+        @keyframes slideUpMobile {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+
         .detail-page {
           padding-bottom: 4rem;
         }

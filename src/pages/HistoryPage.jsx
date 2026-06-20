@@ -102,6 +102,7 @@ export default function HistoryPage() {
                 progressPercent={percent}
                 episodeInfo={progressText}
                 onRemove={handleRemoveItem}
+                episodeId={item.episodeId}
               />
             );
           })}

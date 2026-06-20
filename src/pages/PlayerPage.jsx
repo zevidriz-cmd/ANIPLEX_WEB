@@ -164,6 +164,9 @@ export default function PlayerPage() {
   const skipIntroRange = skipTimes?.intro || (directStream ? directStream.intro : streamData?.intro);
   const skipOutroRange = skipTimes?.outro || (directStream ? directStream.outro : streamData?.outro);
 
+  const currentIndex = episodes.findIndex(e => e.episodeId === episodeId);
+  const nextEpisode = currentIndex !== -1 && currentIndex < episodes.length - 1 ? episodes[currentIndex + 1] : null;
+
   return (
     <div className="player-screen-page">
       <div className="container player-nav-back">
@@ -210,6 +213,17 @@ export default function PlayerPage() {
             animeTitle={animeDetail?.anime?.info?.name}
             episodeNumber={currentEpisode?.number || 1}
             onBack={() => navigate(`/anime/${animeId}`)}
+            nextEpisode={nextEpisode ? {
+              episodeId: nextEpisode.episodeId,
+              number: nextEpisode.number,
+              title: nextEpisode.title || `Episode ${nextEpisode.number}`,
+              poster: animeDetail?.anime?.info?.poster
+            } : null}
+            onNext={() => {
+              if (nextEpisode) {
+                navigate(`/watch/${animeId}/${nextEpisode.episodeId}?audio=${audioCategory}`);
+              }
+            }}
           />
         )}
       </div>

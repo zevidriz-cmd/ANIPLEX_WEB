@@ -3,7 +3,7 @@ import Hls from "hls.js";
 import { 
   Play, Pause, RotateCcw, RotateCw, Volume2, VolumeX, 
   Maximize, Minimize, Settings, Subtitles, SkipForward,
-  Lock, LockOpen, ArrowLeft
+  Lock, LockOpen, ArrowLeft, Loader2, X
 } from "lucide-react";
 
 export default function VideoPlayer({ 
@@ -17,7 +17,9 @@ export default function VideoPlayer({
   embedUrl,
   animeTitle,
   episodeNumber,
-  onBack
+  onBack,
+  nextEpisode,
+  onNext
 }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -25,6 +27,8 @@ export default function VideoPlayer({
   const lastSavedTimeRef = useRef(0);
 
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [upNextDismissed, setUpNextDismissed] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -79,33 +83,38 @@ export default function VideoPlayer({
     const now = Date.now();
     const delay = now - lastTapRef.current.time;
 
+    let isDoubleTap = false;
     if (delay < 300) {
       if (x < w * 0.35) {
         e.preventDefault();
         handleRewind();
         showHUD("seek", "-10s");
         lastTapRef.current = { time: 0, x: 0 };
-        return;
+        isDoubleTap = true;
       } else if (x > w * 0.65) {
         e.preventDefault();
         handleForward();
         showHUD("seek", "+10s");
         lastTapRef.current = { time: 0, x: 0 };
-        return;
+        isDoubleTap = true;
       }
     }
 
     touchRef.current = {
+      startTime: now,
       startX: x,
       startY: y,
       startVolume: volume,
       startBrightness: brightness,
       isSwipe: false,
+      isDoubleTap,
       activeSide: x < w / 2 ? "left" : "right"
     };
 
-    lastTapRef.current = { time: now, x };
-    resetControlsTimeout();
+    if (!isDoubleTap) {
+      lastTapRef.current = { time: now, x };
+    }
+    postponeControlsHide();
   };
 
   const handlePlayerTouchMove = (e) => {
@@ -119,7 +128,7 @@ export default function VideoPlayer({
     const dx = x - touchRef.current.startX;
     const dy = y - touchRef.current.startY;
 
-    if (Math.abs(dy) > 10 && !touchRef.current.isSwipe) {
+    if ((Math.abs(dy) > 10 || Math.abs(dx) > 10) && !touchRef.current.isSwipe) {
       touchRef.current.isSwipe = true;
     }
 
@@ -141,47 +150,90 @@ export default function VideoPlayer({
     }
   };
 
-  const handlePlayerTouchEnd = () => {
+  const handlePlayerTouchEnd = (e) => {
+    if (touchRef.current.isDoubleTap) {
+      touchRef.current.isDoubleTap = false;
+      return;
+    }
+
+    if (!touchRef.current.isSwipe) {
+      const duration = Date.now() - touchRef.current.startTime;
+      if (duration < 250) {
+        // Tapped!
+        // Check if the user tapped on a button/interactive control
+        if (
+          e.target.closest(".control-btn") || 
+          e.target.closest(".player-back-btn") || 
+          e.target.closest(".progress-scrubber") || 
+          e.target.closest(".volume-slider") ||
+          e.target.closest(".settings-panel") || 
+          e.target.closest(".skip-time-overlay") || 
+          e.target.closest(".unlock-btn")
+        ) {
+          return;
+        }
+
+        e.preventDefault(); // Stop click emulation
+        if (isLocked) return;
+
+        setShowControls(prev => {
+          const next = !prev;
+          if (next) {
+            postponeControlsHide();
+          }
+          return next;
+        });
+      }
+    }
     touchRef.current.isSwipe = false;
   };
 
   const handleContainerClick = (e) => {
-    if (
-      e.target.closest(".controls-wrapper") || 
-      e.target.closest(".settings-panel") || 
-      e.target.closest(".skip-time-overlay") || 
-      e.target.closest(".locked-state-overlay") ||
-      e.target.closest(".player-back-btn")
-    ) {
-      return;
+    if (showControls) {
+      if (
+        e.target.closest(".control-btn") || 
+        e.target.closest(".player-back-btn") || 
+        e.target.closest(".progress-scrubber") || 
+        e.target.closest(".volume-slider") ||
+        e.target.closest(".settings-panel") || 
+        e.target.closest(".skip-time-overlay") || 
+        e.target.closest(".unlock-btn")
+      ) {
+        return;
+      }
     }
     if (isLocked) return;
-    setShowControls(prev => !prev);
-  };
 
-  const handleVideoClick = (e) => {
-    if (window.matchMedia("(pointer: coarse)").matches) {
-      return;
-    }
-    e.stopPropagation();
-    if (!isLocked) {
+    if (!showControls && !window.matchMedia("(pointer: coarse)").matches) {
       handlePlayPause();
     }
+
+    setShowControls(prev => {
+      const next = !prev;
+      if (next) {
+        postponeControlsHide();
+      }
+      return next;
+    });
   };
 
   // Activity timer for controls auto-hide
   const controlsTimeoutRef = useRef(null);
 
-  const resetControlsTimeout = () => {
-    setShowControls(true);
+  const postponeControlsHide = () => {
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     controlsTimeoutRef.current = setTimeout(() => {
       if (isPlaying) setShowControls(false);
     }, 3000);
   };
 
+  const showControlsAndResetTimeout = () => {
+    setShowControls(true);
+    postponeControlsHide();
+  };
+
   useEffect(() => {
-    resetControlsTimeout();
+    showControlsAndResetTimeout();
     return () => {
       if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     };
@@ -194,6 +246,8 @@ export default function VideoPlayer({
 
     // Reset state
     setIsPlaying(false);
+    setIsLoading(true);
+    setUpNextDismissed(false);
     setCurrentTime(0);
     setDuration(0);
     lastSavedTimeRef.current = 0;
@@ -301,19 +355,18 @@ export default function VideoPlayer({
   // Skip overlays check
   useEffect(() => {
     // Check Skip Intro
-    if (intro && currentTime >= intro.start && currentTime <= intro.end) {
+    if (intro && intro.end > intro.start && currentTime >= intro.start && currentTime <= intro.end) {
       setShowSkipIntro(true);
     } else {
       setShowSkipIntro(false);
     }
 
     // Check Skip Outro
-    if (outro && currentTime >= outro.start && currentTime <= outro.end) {
+    if (outro && outro.end > outro.start && currentTime >= outro.start && currentTime <= outro.end) {
       setShowSkipOutro(true);
     } else {
       setShowSkipOutro(false);
     }
-
     // Periodic Progress Saving (every 10s, or when pausing/ending)
     if (onProgress && duration > 0) {
       const curMs = currentTime * 1000;
@@ -326,6 +379,16 @@ export default function VideoPlayer({
       }
     }
   }, [currentTime, duration, intro, outro]);
+
+  // Autoplay countdown handler
+  useEffect(() => {
+    if (!nextEpisode || upNextDismissed || duration === 0) return;
+    
+    const timeRemaining = duration - currentTime;
+    if (timeRemaining <= 0.8 && timeRemaining > 0) {
+      if (onNext) onNext();
+    }
+  }, [currentTime, duration, nextEpisode, upNextDismissed, onNext]);
 
   const handlePlayPause = () => {
     const video = videoRef.current;
@@ -408,6 +471,7 @@ export default function VideoPlayer({
         case "K":
           e.preventDefault();
           handlePlayPause();
+          showControlsAndResetTimeout();
           break;
         case "ArrowLeft":
         case "j":
@@ -415,6 +479,7 @@ export default function VideoPlayer({
           e.preventDefault();
           handleRewind();
           showHUD("seek", "-10s");
+          showControlsAndResetTimeout();
           break;
         case "ArrowRight":
         case "l":
@@ -422,6 +487,7 @@ export default function VideoPlayer({
           e.preventDefault();
           handleForward();
           showHUD("seek", "+10s");
+          showControlsAndResetTimeout();
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -431,6 +497,7 @@ export default function VideoPlayer({
             return next;
           });
           setIsMuted(false);
+          showControlsAndResetTimeout();
           break;
         case "ArrowDown":
           e.preventDefault();
@@ -440,16 +507,19 @@ export default function VideoPlayer({
             if (next === 0) setIsMuted(true);
             return next;
           });
+          showControlsAndResetTimeout();
           break;
         case "f":
         case "F":
           e.preventDefault();
           handleFullscreenToggle();
+          showControlsAndResetTimeout();
           break;
         case "m":
         case "M":
           e.preventDefault();
           handleMuteToggle();
+          showControlsAndResetTimeout();
           break;
         default:
           break;
@@ -561,12 +631,26 @@ export default function VideoPlayer({
     <div 
       className={`player-container ${isFullscreen ? "fullscreen" : ""}`} 
       ref={containerRef}
-      onMouseMove={resetControlsTimeout}
+      onMouseMove={showControlsAndResetTimeout}
       onMouseLeave={() => isPlaying && setShowControls(false)}
       onTouchStart={handlePlayerTouchStart}
       onTouchMove={handlePlayerTouchMove}
       onTouchEnd={handlePlayerTouchEnd}
       onClick={handleContainerClick}
+      onDoubleClick={(e) => {
+        if (
+          e.target.closest(".control-btn") || 
+          e.target.closest(".player-back-btn") || 
+          e.target.closest(".progress-scrubber") || 
+          e.target.closest(".volume-slider") ||
+          e.target.closest(".settings-panel") || 
+          e.target.closest(".skip-time-overlay") || 
+          e.target.closest(".locked-state-overlay")
+        ) {
+          return;
+        }
+        handleFullscreenToggle();
+      }}
     >
       {/* Brightness Emulation Overlay */}
       <div 
@@ -580,6 +664,13 @@ export default function VideoPlayer({
           zIndex: 45
         }}
       />
+
+      {/* Loading Spinner */}
+      {isLoading && (
+        <div className="player-loading-overlay flex-center">
+          <Loader2 className="spin-icon" size={48} />
+        </div>
+      )}
 
       {/* Gesture HUD */}
       {gestureHUD && (
@@ -596,14 +687,25 @@ export default function VideoPlayer({
 
       {/* Screen Lock Mobile Overlay */}
       {isLocked && (
-        <div className="locked-state-overlay" onClick={() => setShowControls(true)}>
+        <div 
+          className="locked-state-overlay" 
+          onClick={() => {
+            setShowControls(prev => {
+              const next = !prev;
+              if (next) {
+                postponeControlsHide();
+              }
+              return next;
+            });
+          }}
+        >
           {showControls && (
             <button 
               className="unlock-btn flex-center"
               onClick={(e) => {
                 e.stopPropagation();
                 setIsLocked(false);
-                resetControlsTimeout();
+                showControlsAndResetTimeout();
               }}
             >
               <LockOpen size={20} /> Tap to Unlock
@@ -615,13 +717,19 @@ export default function VideoPlayer({
       <video 
         ref={videoRef}
         className="video-element"
-        onClick={handleVideoClick}
-        onDoubleClick={handleFullscreenToggle}
-        onPlay={() => setIsPlaying(true)}
+        onPlay={() => {
+          setIsPlaying(true);
+          setIsLoading(false);
+        }}
         onPause={() => setIsPlaying(false)}
         onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
         onDurationChange={(e) => setDuration(e.target.duration)}
         onEnded={onEnded}
+        onWaiting={() => setIsLoading(true)}
+        onPlaying={() => setIsLoading(false)}
+        onCanPlay={() => setIsLoading(false)}
+        onLoadStart={() => setIsLoading(true)}
+        onLoadedData={() => setIsLoading(false)}
         crossOrigin="anonymous"
       >
         {tracks.map((track, i) => (
@@ -636,6 +744,20 @@ export default function VideoPlayer({
         ))}
       </video>
 
+      {/* Tap/Click capturing overlay when controls are hidden */}
+      {!showControls && (
+        <div 
+          className="player-click-overlay" 
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 35,
+            backgroundColor: "transparent",
+            cursor: "pointer"
+          }}
+        />
+      )}
+
       {/* Intro Skip Overlay */}
       {showSkipIntro && (
         <button className="skip-time-overlay intro" onClick={handleSkipIntro}>
@@ -648,6 +770,63 @@ export default function VideoPlayer({
         <button className="skip-time-overlay outro" onClick={handleSkipOutro}>
           <SkipForward size={16} /> Skip Outro
         </button>
+      )}
+
+      {/* Up Next Autoplay Overlay */}
+      {nextEpisode && !upNextDismissed && duration > 0 && (duration - currentTime <= 15) && (
+        <div className="up-next-overlay" onClick={(e) => e.stopPropagation()}>
+          <button 
+            className="up-next-close-btn" 
+            onClick={(e) => {
+              e.stopPropagation();
+              setUpNextDismissed(true);
+            }}
+            aria-label="Dismiss Up Next"
+            type="button"
+          >
+            <X size={14} />
+          </button>
+          
+          <div className="up-next-content">
+            <span className="up-next-label">Up Next</span>
+            <div className="up-next-row">
+              <div className="up-next-poster-wrapper">
+                <img src={nextEpisode.poster} alt={nextEpisode.title} className="up-next-poster" />
+                <button 
+                  className="up-next-play-icon-btn flex-center"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onNext) onNext();
+                  }}
+                  type="button"
+                >
+                  <Play size={18} fill="white" />
+                </button>
+              </div>
+              <div className="up-next-info">
+                <h4 className="up-next-title" title={nextEpisode.title}>{nextEpisode.title}</h4>
+                <p className="up-next-desc">Episode {nextEpisode.number}</p>
+                <div className="up-next-timer">
+                  {duration - currentTime <= 10 ? (
+                    <span>Autoplay in <strong>{Math.max(0, Math.floor(duration - currentTime))}</strong>s</span>
+                  ) : (
+                    <span>Up next soon</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <button 
+              className="btn btn-primary up-next-btn-play"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onNext) onNext();
+              }}
+              type="button"
+            >
+              Play Now
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Custom Controls UI */}
@@ -666,17 +845,19 @@ export default function VideoPlayer({
         </div>
 
         {/* Center buttons */}
-        <div className="player-center-controls">
-          <button className="control-btn center-btn" onClick={handleRewind}>
-            <RotateCcw size={28} />
-          </button>
-          <button className="control-btn center-btn play-pause-btn" onClick={handlePlayPause}>
-            {isPlaying ? <Pause size={38} fill="white" /> : <Play size={38} fill="white" />}
-          </button>
-          <button className="control-btn center-btn" onClick={handleForward}>
-            <RotateCw size={28} />
-          </button>
-        </div>
+        {!isLoading && (
+          <div className="player-center-controls">
+            <button className="control-btn center-btn" onClick={handleRewind}>
+              <RotateCcw size={28} />
+            </button>
+            <button className="control-btn center-btn play-pause-btn" onClick={handlePlayPause}>
+              {isPlaying ? <Pause size={38} fill="white" /> : <Play size={38} fill="white" />}
+            </button>
+            <button className="control-btn center-btn" onClick={handleForward}>
+              <RotateCw size={28} />
+            </button>
+          </div>
+        )}
 
         {/* Bottom controls panel */}
         <div className="player-bottom-panel">
@@ -1053,6 +1234,145 @@ export default function VideoPlayer({
           } !important;
         }
 
+        /* Loading Spinner Overlay */
+        .player-loading-overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 38;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.55);
+          pointer-events: none;
+        }
+        .spin-icon {
+          color: var(--primary);
+          animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+
+        /* Up Next Autoplay Overlay */
+        .up-next-overlay {
+          position: absolute;
+          bottom: 100px;
+          right: 24px;
+          z-index: 50;
+          background: rgba(20, 20, 20, 0.95);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          width: 320px;
+          padding: 16px;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+          animation: slideInUpNext 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes slideInUpNext {
+          from { transform: translateY(20px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+        .up-next-close-btn {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          color: white;
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: var(--transition);
+          z-index: 52;
+        }
+        .up-next-close-btn:hover {
+          background: rgba(255, 255, 255, 0.2);
+          transform: scale(1.1);
+        }
+        .up-next-content {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .up-next-label {
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 0.1em;
+          color: var(--primary);
+          font-weight: 700;
+        }
+        .up-next-row {
+          display: flex;
+          gap: 12px;
+        }
+        .up-next-poster-wrapper {
+          position: relative;
+          width: 100px;
+          height: 56px;
+          border-radius: 6px;
+          overflow: hidden;
+          background: #000;
+          flex-shrink: 0;
+          border: 1px solid var(--border);
+        }
+        .up-next-poster {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .up-next-play-icon-btn {
+          position: absolute;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.4);
+          border: none;
+          color: white;
+          cursor: pointer;
+          opacity: 0;
+          transition: var(--transition);
+        }
+        .up-next-poster-wrapper:hover .up-next-play-icon-btn {
+          opacity: 1;
+        }
+        .up-next-info {
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+        .up-next-title {
+          font-size: 0.85rem;
+          font-weight: 700;
+          color: white;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 160px;
+        }
+        .up-next-desc {
+          font-size: 0.75rem;
+          color: var(--text-secondary);
+          margin-top: 2px;
+        }
+        .up-next-timer {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+          margin-top: 4px;
+        }
+        .up-next-timer strong {
+          color: var(--primary);
+        }
+        .up-next-btn-play {
+          width: 100%;
+          padding: 8px !important;
+          font-size: 0.85rem !important;
+          font-weight: 700 !important;
+        }
+
         /* Gesture HUD styles */
         .gesture-hud-overlay {
           position: absolute;
@@ -1105,6 +1425,58 @@ export default function VideoPlayer({
         .unlock-btn:hover {
           background: white;
           color: var(--primary);
+        }
+
+        @media (max-width: 768px) {
+          .controls-wrapper {
+            padding: 12px;
+          }
+          .player-center-controls {
+            gap: 1.8rem;
+          }
+          .play-pause-btn {
+            width: 56px;
+            height: 56px;
+          }
+          .play-pause-btn svg {
+            width: 24px;
+            height: 24px;
+          }
+          .volume-slider {
+            display: none !important; /* Hide volume slider on mobile, swipe gesture is used */
+          }
+          .settings-panel {
+            right: -20px;
+            width: 180px;
+            bottom: calc(100% + 10px);
+            padding: 10px;
+          }
+          .anime-title {
+            font-size: 0.95rem;
+            max-width: 150px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          .skip-time-overlay {
+            bottom: 80px;
+            right: 15px;
+            padding: 6px 12px;
+            font-size: 0.8rem;
+          }
+          .up-next-overlay {
+            bottom: 75px;
+            right: 12px;
+            width: 280px;
+            padding: 12px;
+          }
+          .up-next-poster-wrapper {
+            width: 80px;
+            height: 45px;
+          }
+          .up-next-title {
+            max-width: 140px;
+          }
         }
       `}</style>
     </div>

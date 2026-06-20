@@ -1,19 +1,26 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { search, getSuggestions, getGenre } from "../services/api";
+import { useProfile } from "../context/ProfileContext";
 import AnimeCard from "../components/AnimeCard";
 import { GridShimmer } from "../components/Shimmer";
-import { Search as SearchIcon, Filter, X, ChevronLeft, ChevronRight, SlidersHorizontal } from "lucide-react";
+import { Search as SearchIcon, Filter, X, ChevronLeft, ChevronRight, SlidersHorizontal, MoreVertical, Trash2, History } from "lucide-react";
 
 export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const genreParam = searchParams.get("genre") || "";
+  const { activeProfile } = useProfile();
 
   const [keyword, setKeyword] = useState("");
   const [results, setResults] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [loading, setLoading] = useState(false);
   
+  // Search History State
+  const [searchHistory, setSearchHistory] = useState([]);
+  const [activeSearchMenuIndex, setActiveSearchMenuIndex] = useState(-1);
+  const inputRef = useRef(null);
+
   // Pagination
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -27,6 +34,57 @@ export default function SearchPage() {
   const [sort, setSort] = useState("");
 
   const searchTimeoutRef = useRef(null);
+
+  // Load search history when activeProfile changes
+  useEffect(() => {
+    if (activeProfile) {
+      const historyKey = `anistream_search_history_${activeProfile.id}`;
+      const stored = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      setSearchHistory(stored);
+    }
+  }, [activeProfile]);
+
+  const saveSearchQuery = (query) => {
+    if (!query || !query.trim() || !activeProfile) return;
+    const trimmed = query.trim();
+    const historyKey = `anistream_search_history_${activeProfile.id}`;
+    let current = JSON.parse(localStorage.getItem(historyKey) || "[]");
+    
+    current = current.filter(x => x !== trimmed);
+    current.unshift(trimmed);
+    current = current.slice(0, 5); // limit to 5 recent queries
+    
+    localStorage.setItem(historyKey, JSON.stringify(current));
+    setSearchHistory(current);
+  };
+
+  const deleteSearchQuery = (queryToDelete) => {
+    if (!activeProfile) return;
+    const historyKey = `anistream_search_history_${activeProfile.id}`;
+    let current = JSON.parse(localStorage.getItem(historyKey) || "[]");
+    current = current.filter(x => x !== queryToDelete);
+    localStorage.setItem(historyKey, JSON.stringify(current));
+    setSearchHistory(current);
+  };
+
+  // Close search menu on click outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (activeSearchMenuIndex !== -1 && !event.target.closest(".recent-search-options-wrapper")) {
+        setActiveSearchMenuIndex(-1);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [activeSearchMenuIndex]);
+
+  const handleToggleSearchMenu = (e, index) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveSearchMenuIndex(activeSearchMenuIndex === index ? -1 : index);
+  };
 
   // Sync genre parameter from URL if clicked from Home genre chips
   useEffect(() => {
@@ -53,23 +111,27 @@ export default function SearchPage() {
     }
   };
 
-  const handleSearchSubmit = async (p = 1) => {
-    if (!keyword.trim() && selectedGenres.length === 0 && !type && !status && !sort) {
+  const handleSearchSubmit = async (p = 1, searchKeyword = keyword) => {
+    const queryToSearch = typeof searchKeyword === "string" ? searchKeyword : keyword;
+    if (!queryToSearch.trim() && selectedGenres.length === 0 && !type && !status && !sort) {
       setResults([]);
       return;
     }
 
     setLoading(true);
     setSuggestions([]);
+    inputRef.current?.blur(); // Blur search input to dismiss mobile keyboard!
+
     try {
-      // If we have filters selected, we can call the search/filter endpoints
-      // In this client we support standard keyword search or filter search.
-      // If there's a keyword, we run the search.
-      const data = await search(keyword || "all", p);
+      const data = await search(queryToSearch || "all", p);
       setResults(data?.animes || []);
       setPage(data?.currentPage || 1);
       setTotalPages(data?.totalPages || 1);
       setHasNextPage(data?.hasNextPage || false);
+
+      if (queryToSearch && queryToSearch.trim()) {
+        saveSearchQuery(queryToSearch);
+      }
     } catch (e) {
       console.error("Search error:", e);
     } finally {
@@ -133,6 +195,7 @@ export default function SearchPage() {
         <div className="search-bar-wrapper">
           <SearchIcon className="search-icon-svg" size={20} />
           <input 
+            ref={inputRef}
             type="text" 
             placeholder="Search anime title, movies, ova..."
             className="search-input-box"
@@ -151,7 +214,16 @@ export default function SearchPage() {
           {suggestions.length > 0 && (
             <div className="suggestions-dropdown">
               {suggestions.map((item) => (
-                <Link key={item.id} to={`/anime/${item.id}`} className="suggestion-item">
+                <Link 
+                  key={item.id} 
+                  to={`/anime/${item.id}`} 
+                  className="suggestion-item"
+                  onClick={() => {
+                    saveSearchQuery(item.name);
+                    inputRef.current?.blur();
+                    setSuggestions([]);
+                  }}
+                >
                   <div className="suggestion-poster">
                     <img src={item.poster} alt={item.name} />
                   </div>
@@ -261,6 +333,7 @@ export default function SearchPage() {
                     type={anime.type}
                     episodes={anime.episodes}
                     rating={anime.rate}
+                    onClick={() => saveSearchQuery(anime.name)}
                   />
                 ))}
               </div>
@@ -292,6 +365,51 @@ export default function SearchPage() {
                 </div>
               )}
             </>
+          ) : !keyword.trim() && searchHistory.length > 0 ? (
+            <div className="recent-searches-container fade-in">
+              <h3 className="recent-searches-title">Recent Searches</h3>
+              <div className="recent-searches-list">
+                {searchHistory.map((queryText, index) => (
+                  <div key={index} className="recent-search-row">
+                    <button 
+                      className="recent-search-item-btn"
+                      onClick={() => {
+                        setKeyword(queryText);
+                        handleSearchSubmit(1, queryText);
+                      }}
+                    >
+                      <History size={16} className="text-muted" />
+                      <span className="recent-search-text">{queryText}</span>
+                    </button>
+                    
+                    <div className="recent-search-options-wrapper">
+                      <button 
+                        className="recent-search-dots-btn"
+                        onClick={(e) => handleToggleSearchMenu(e, index)}
+                        title="Options"
+                      >
+                        <MoreVertical size={16} />
+                      </button>
+                      
+                      {activeSearchMenuIndex === index && (
+                        <div className="recent-search-menu">
+                          <button 
+                            className="recent-menu-item delete"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteSearchQuery(queryText);
+                              setActiveSearchMenuIndex(-1);
+                            }}
+                          >
+                            <Trash2 size={12} /> Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : (
             <div className="search-empty flex-center text-center">
               <div>
@@ -544,6 +662,126 @@ export default function SearchPage() {
           .filter-genres-grid {
             grid-template-columns: repeat(2, 1fr);
           }
+        }
+
+        /* Recent Searches Styles */
+        .recent-searches-container {
+          max-width: 600px;
+          margin: 1rem 0;
+          animation: fadeIn 0.25s ease-out;
+        }
+        .recent-searches-title {
+          font-size: 1.1rem;
+          font-weight: 700;
+          color: white;
+          margin-bottom: 1rem;
+          border-bottom: 1px solid var(--border);
+          padding-bottom: 8px;
+        }
+        .recent-searches-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .recent-search-row {
+          position: relative;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          background-color: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 8px 12px;
+          transition: var(--transition);
+        }
+        .recent-search-row:hover {
+          background-color: rgba(255, 255, 255, 0.03);
+          border-color: rgba(255, 255, 255, 0.15);
+        }
+        .recent-search-item-btn {
+          flex-grow: 1;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          background: none;
+          border: none;
+          color: var(--text-secondary);
+          text-align: left;
+          font-size: 0.95rem;
+          font-family: var(--font-family);
+          cursor: pointer;
+          padding: 6px 0;
+          transition: var(--transition);
+          min-width: 0;
+        }
+        .recent-search-item-btn:hover {
+          color: white;
+        }
+        .recent-search-text {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          font-weight: 500;
+        }
+        .recent-search-options-wrapper {
+          position: relative;
+          display: flex;
+          align-items: center;
+          margin-left: 10px;
+        }
+        .recent-search-dots-btn {
+          background: none;
+          border: none;
+          color: var(--text-muted);
+          cursor: pointer;
+          padding: 6px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: var(--transition);
+        }
+        .recent-search-dots-btn:hover {
+          color: white;
+          background-color: rgba(255, 255, 255, 0.08);
+        }
+        .recent-search-menu {
+          position: absolute;
+          top: 100%;
+          right: 0;
+          background: #141414;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 4px;
+          min-width: 100px;
+          box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+          z-index: 10;
+          animation: fadeIn 0.15s ease-out;
+        }
+        .recent-menu-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 10px;
+          color: var(--text-secondary);
+          background: none;
+          border: none;
+          font-size: 0.8rem;
+          font-weight: 600;
+          border-radius: 4px;
+          width: 100%;
+          text-align: left;
+          cursor: pointer;
+          font-family: var(--font-family);
+          transition: var(--transition);
+        }
+        .recent-menu-item:hover {
+          background-color: rgba(255, 255, 255, 0.05);
+          color: white;
+        }
+        .recent-menu-item.delete:hover {
+          background-color: rgba(229, 9, 20, 0.1);
+          color: var(--primary);
         }
       `}</style>
     </div>

@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Play } from "lucide-react";
+import { Play, Info, Trash2, MoreVertical } from "lucide-react";
 
 export default function AnimeCard({ 
   id, 
@@ -11,13 +11,48 @@ export default function AnimeCard({
   rating,
   progressPercent,
   episodeInfo,
-  onRemove
+  onRemove,
+  episodeId,
+  audioCategory,
+  onClick
 }) {
   const subCount = episodes?.sub;
   const dubCount = episodes?.dub;
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [menuOpen]);
+
+  const handleToggleMenu = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuOpen(!menuOpen);
+  };
+
+  const handleRemoveClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuOpen(false);
+    if (onRemove) {
+      onRemove(id);
+    }
+  };
+
   return (
-    <div className="anime-card">
+    <div className="anime-card" onClick={onClick}>
       <Link to={`/anime/${id}`} className="anime-card-link">
         <div className="poster-wrapper">
           <img src={poster} alt={name} loading="lazy" className="poster-img" />
@@ -56,17 +91,46 @@ export default function AnimeCard({
       </Link>
       
       {onRemove && (
-        <button 
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onRemove(id);
-          }}
-          className="remove-card-btn"
-          title="Remove"
-        >
-          &times;
-        </button>
+        <div className="card-options-wrapper" ref={menuRef}>
+          <button 
+            onClick={handleToggleMenu} 
+            className="options-trigger-btn"
+            title="Options"
+          >
+            <MoreVertical size={16} />
+          </button>
+          {menuOpen && (
+            <div className="card-options-menu">
+              {episodeId ? (
+                <Link 
+                  to={`/watch/${id}/${episodeId}${audioCategory ? `?audio=${audioCategory}` : ''}`} 
+                  className="menu-item-link"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <Play size={12} fill="white" /> Resume
+                </Link>
+              ) : (
+                <Link 
+                  to={`/anime/${id}`} 
+                  className="menu-item-link"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <Play size={12} fill="white" /> Play
+                </Link>
+              )}
+              <Link 
+                to={`/anime/${id}`} 
+                className="menu-item-link"
+                onClick={() => setMenuOpen(false)}
+              >
+                <Info size={12} /> Info
+              </Link>
+              <button onClick={handleRemoveClick} className="menu-item-btn remove">
+                <Trash2 size={12} /> Remove
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       <style>{`
@@ -213,36 +277,78 @@ export default function AnimeCard({
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           margin-bottom: 2px;
+          padding-right: 18px; /* Avoid overlapping the 3-dot trigger button */
         }
         .episode-info {
           font-size: 0.75rem;
           color: var(--text-secondary);
           margin-top: 2px;
         }
-        .remove-card-btn {
+        .card-options-wrapper {
           position: absolute;
-          top: 8px;
+          bottom: 8px;
           right: 8px;
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          background: rgba(0, 0, 0, 0.8);
-          border: none;
-          color: var(--text-secondary);
-          font-size: 1.2rem;
-          line-height: 22px;
-          text-align: center;
-          cursor: pointer;
           z-index: 10;
-          display: none;
+        }
+        .options-trigger-btn {
+          background: rgba(0, 0, 0, 0.7);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: var(--text-secondary);
+          border-radius: 50%;
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
           transition: var(--transition);
         }
-        .anime-card:hover .remove-card-btn {
-          display: block;
-        }
-        .remove-card-btn:hover {
+        .options-trigger-btn:hover {
           color: white;
-          background: var(--primary);
+          background: rgba(255, 255, 255, 0.15);
+          border-color: rgba(255, 255, 255, 0.25);
+        }
+        .card-options-menu {
+          position: absolute;
+          bottom: calc(100% + 6px);
+          right: 0;
+          background: #141414;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 4px;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 120px;
+          box-shadow: 0 5px 25px rgba(0,0,0,0.6);
+          z-index: 20;
+          animation: fadeIn 0.15s ease-out;
+        }
+        .menu-item-link, .menu-item-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 8px;
+          color: var(--text-secondary);
+          text-decoration: none;
+          font-size: 0.75rem;
+          font-weight: 600;
+          background: none;
+          border: none;
+          border-radius: 4px;
+          width: 100%;
+          text-align: left;
+          cursor: pointer;
+          font-family: var(--font-family);
+          transition: var(--transition);
+        }
+        .menu-item-link:hover, .menu-item-btn:hover {
+          background: rgba(255, 255, 255, 0.05);
+          color: white;
+        }
+        .menu-item-btn.remove:hover {
+          background: rgba(229, 9, 20, 0.1);
+          color: var(--primary);
         }
       `}</style>
     </div>
