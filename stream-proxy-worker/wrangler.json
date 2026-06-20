@@ -1,0 +1,8 @@
+{
+  "name": "anistream-proxy",
+  "main": "index.js",
+  "compatibility_date": "2026-06-20",
+  "observability": {
+    "enabled": true
+  }
+}
