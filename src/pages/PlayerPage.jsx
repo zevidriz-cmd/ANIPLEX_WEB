@@ -47,7 +47,7 @@ export default function PlayerPage() {
         const ep = epData?.episodes?.find(e => e.episodeId === episodeId);
         setCurrentEpisode(ep);
 
-        // 2. Fetch watch history from Firestore to get initial saved progress
+        // 2. Fetch watch history and manage watchlist status from Firestore
         if (currentUser && activeProfile) {
           const docRef = doc(db, "users", currentUser.uid, "profiles", activeProfile.id, "history", animeId);
           const histSnap = await getDoc(docRef);
@@ -60,6 +60,30 @@ export default function PlayerPage() {
             }
           } else {
             setInitialSavedProgress(0);
+          }
+
+          // Auto-manage "watching" watchlist status
+          try {
+            const watchlistRef = doc(db, "users", currentUser.uid, "profiles", activeProfile.id, "watchlist", animeId);
+            const watchlistSnap = await getDoc(watchlistRef);
+            if (!watchlistSnap.exists()) {
+              await setDoc(watchlistRef, {
+                id: animeId,
+                name: detailData.anime.info.name,
+                poster: detailData.anime.info.poster,
+                status: "watching",
+                addedAt: Date.now()
+              });
+            } else {
+              const watchlistData = watchlistSnap.data();
+              if (watchlistData.status === "planning") {
+                await setDoc(watchlistRef, {
+                  status: "watching"
+                }, { merge: true });
+              }
+            }
+          } catch (e) {
+            console.warn("Error managing auto-watching status:", e);
           }
         }
 
